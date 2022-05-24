@@ -2231,8 +2231,12 @@ static inline int negamax(int depth, int alpha, int beta)
         // fail-hard cutoff
         if (score >= beta)
         {
-            killer_moves[1][ply] = killer_moves[0][ply];
-            killer_moves[0][ply] = move;
+            if(!get_move_capture(move))
+            {
+
+                killer_moves[1][ply] = killer_moves[0][ply];
+                killer_moves[0][ply] = move;
+            }
             // node fails high
             return beta;
         }
@@ -2240,7 +2244,8 @@ static inline int negamax(int depth, int alpha, int beta)
         // found a better move than before
         if (score > alpha)
         {
-            history_moves[get_move_piece(move)][get_move_dest(move)] += depth;
+            if(!get_move_capture(move))
+                history_moves[get_move_piece(move)][get_move_dest(move)] += depth;
             alpha = score;
 
             if (ply == 0) // if root node
@@ -2569,7 +2574,7 @@ int main()
 
     if(debug)
     {
-        parse_fen(killer_position);
+        parse_fen(tricky_position);
         print_board();
         
         search_position(5);
