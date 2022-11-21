@@ -3,8 +3,7 @@
  * 
  *  
  * 			          		        JABBEROOK						
- *                      heavily inspired by BBC Engine
- *      https://github.com/maksimKorzh/chess_programming/tree/master/src/bbc
+ *
  * 
  * 
  * *********************************************************************************/
@@ -109,6 +108,7 @@ int char_pieces [] =
 *
 *
 *             Time controls variables
+*                   from BBC
 *
 *
 *************************************************/
@@ -290,6 +290,7 @@ static void communicate() {
  *
  * **************************************************************/
 
+// https://www.chessprogramming.org/Looking_for_Magics
 // pseudo random number state
 unsigned int random_state = 1804289383;
 
@@ -3032,25 +3033,6 @@ int main()
 
     if(debug)
     {
-        parse_fen(tricky_position);
-        print_board();
-
-        //int starttime = get_time_ms();
-
-        search_position(5);
-
-        //printf("\nTime taken: %dms\n", get_time_ms() - starttime);
-
-    //     moves move_list[1];
-
-    //     generate_moves(move_list);
-
-    //     print_move_scores(move_list);
-
-    //     printf("\n\n");
-    //     sort_moves(move_list);
-
-    //     print_move_scores(move_list);
     }
     else
         uci_loop();
