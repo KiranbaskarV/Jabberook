@@ -1,20 +1,22 @@
-/****************************************************************
+/***********************************************************************************
  * 
  * 
+ *  
+ * 			          		        JABBEROOK						
+ *                      heavily inspired by BBC Engine
+ *      https://github.com/maksimKorzh/chess_programming/tree/master/src/bbc
  * 
- * 					BITBOARD CHESS ENGINE						
  * 
- * 
- * 
- * **************************************************************/
+ * *********************************************************************************/
 
 //headers
 
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <unistd.h>
 
-#ifdef WIN64
+#ifdef __MINGW32__
     #include <windows.h>
 #else
     #include <sys/time.h>
@@ -102,6 +104,180 @@ int char_pieces [] =
      ['q'] = q,
      ['k'] = k
 };
+
+/************************************************
+*
+*
+*             Time controls variables
+*
+*
+*************************************************/
+
+// exit from engine flag
+int quit = 0;
+
+// UCI "movestogo" command moves counter
+int movestogo = 30;
+
+// UCI "movetime" command time counter
+int movetime = -1;
+
+// UCI "time" command holder (ms)
+int ucitime = -1;
+
+// UCI "inc" command's time increment holder
+int inc = 0;
+
+// UCI "starttime" command time holder
+int starttime = 0;
+
+// UCI "stoptime" command time holder
+int stoptime = 0;
+
+// variable to flag time control availability
+int timeset = 0;
+
+// variable to flag when the time is up
+int stopped = 0;
+
+// check if first move
+int first_move = 1;
+
+/**************************************************
+*       
+*             Miscellaneous functions
+*               forked from BBC
+*
+*
+**************************************************/
+
+// get time in milliseconds
+int get_time_ms()
+{
+    #ifdef __MINGW32__
+        return GetTickCount();
+    #else
+        struct timeval time_value;
+        gettimeofday(&time_value, NULL);
+        return time_value.tv_sec * 1000 + time_value.tv_usec / 1000;
+    #endif
+}
+
+/*
+  Function to "listen" to GUI's input during search.
+  It's waiting for the user input from STDIN.
+  OS dependent.
+  
+  First Richard Allbert aka BluefeverSoftware grabbed it from somewhere...
+  And then Code Monkey King has grabbed it from VICE)
+  
+*/
+  
+int input_waiting()
+{
+    #ifndef WIN32
+        fd_set readfds;
+        struct timeval tv;
+        FD_ZERO (&readfds);
+        FD_SET (fileno(stdin), &readfds);
+        tv.tv_sec=0; tv.tv_usec=0;
+        select(16, &readfds, 0, 0, &tv);
+
+        return (FD_ISSET(fileno(stdin), &readfds));
+    #else
+        static int init = 0, pipe;
+        static HANDLE inh;
+        DWORD dw;
+
+        if (!init)
+        {
+            init = 1;
+            inh = GetStdHandle(STD_INPUT_HANDLE);
+            pipe = !GetConsoleMode(inh, &dw);
+            if (!pipe)
+            {
+                SetConsoleMode(inh, dw & ~(ENABLE_MOUSE_INPUT|ENABLE_WINDOW_INPUT));
+                FlushConsoleInputBuffer(inh);
+            }
+        }
+        
+        if (pipe)
+        {
+           if (!PeekNamedPipe(inh, NULL, 0, NULL, &dw, NULL)) return 1;
+           return dw;
+        }
+        
+        else
+        {
+           GetNumberOfConsoleInputEvents(inh, &dw);
+           return dw <= 1 ? 0 : dw;
+        }
+
+    #endif
+}
+
+// read GUI/user input
+void read_input()
+{
+    // bytes to read holder
+    int bytes;
+    
+    // GUI/user input
+    char input[256] = "", *endc;
+
+    // "listen" to STDIN
+    if (input_waiting())
+    {
+        // tell engine to stop calculating
+        stopped = 1;
+        
+        // loop to read bytes from STDIN
+        do
+        {
+            // read bytes from STDIN
+            bytes=read(fileno(stdin), input, 256);
+        }
+        
+        // until bytes available
+        while (bytes < 0);
+        
+        // searches for the first occurrence of '\n'
+        endc = strchr(input,'\n');
+        
+        // if found new line set value at pointer to 0
+        if (endc) *endc=0;
+        
+        // if input is available
+        if (strlen(input) > 0)
+        {
+            // match UCI "quit" command
+            if (!strncmp(input, "quit", 4))
+            {
+                // tell engine to terminate exacution    
+                quit = 1;
+            }
+
+            // // match UCI "stop" command
+            else if (!strncmp(input, "stop", 4))    {
+                // tell engine to terminate exacution
+                quit = 1;
+            }
+        }   
+    }
+}
+
+// a bridge function to interact between search and GUI input
+static void communicate() {
+    // if time is up break here
+    if(timeset == 1 && get_time_ms() > stoptime) {
+        // tell engine to stop calculating
+        stopped = 1;
+    }
+    
+    // read GUI input
+    read_input();
+}
+
 
 
 /****************************************************************
@@ -1363,7 +1539,7 @@ static inline int make_move(int move, int move_flag)
         // if move is capture make the move (recursive call to make the move go through the move parser above)
         if (get_move_capture(move)) 
         {
-            return make_move(move, all_moves);
+            make_move(move, all_moves);
         }
 
         else
@@ -1398,7 +1574,7 @@ static inline void generate_moves(moves *move_list)
                     dest_square = source_square - 8;
 
                     // Check if destination on board and not occupied by some piece
-                    if (dest_square > a8 && !get_bit(occupancies[both], dest_square))
+                    if (dest_square >= a8 && !get_bit(occupancies[both], dest_square))
                     {
                         // Check for promotion
                         if (source_square >= a7 && source_square <= h7)
@@ -1513,7 +1689,7 @@ static inline void generate_moves(moves *move_list)
                     dest_square = source_square + 8;
 
                     // Check if destination on board and not occupied by some piece
-                    if (dest_square < h1 && !get_bit(occupancies[both], dest_square))
+                    if (dest_square <= h1 && !get_bit(occupancies[both], dest_square))
                     {
                         // Check for promotion
                         if (source_square >= a2 && source_square <= h2)
@@ -1795,7 +1971,7 @@ static inline void generate_moves(moves *move_list)
 
 int get_time_in_ms()
 {
-    #ifdef WIN64
+    #ifdef __MINGW32__
         return GetTickCount();
     #else
         struct timeval time_value;
@@ -1910,14 +2086,14 @@ const int pawn_score[64] =
 // knight positional score
 const int knight_score[64] = 
 {
-    -5,   0,   0,   0,   0,   0,   0,  -5,
-    -5,   0,   0,  10,  10,   0,   0,  -5,
-    -5,   5,  20,  20,  20,  20,   5,  -5,
-    -5,  10,  20,  30,  30,  20,  10,  -5,
-    -5,  10,  20,  30,  30,  20,  10,  -5,
-    -5,   5,  20,  10,  10,  20,   5,  -5,
-    -5,   0,   0,   0,   0,   0,   0,  -5,
-    -5, -10,   0,   0,   0,   0, -10,  -5
+    -10,   0,   0,   0,   0,   0,   0,  -10,
+    -5,    0,   0,  10,  10,   0,   0,   -5,
+    -5,    5,  20,  20,  20,  20,   5,   -5,
+    -5,   10,  20,  30,  30,  20,  10,   -5,
+    -5,   10,  20,  30,  30,  20,  10,   -5,
+    -5,    5,  20,  10,  10,  20,   5,   -5,
+    -5,    0,   0,   0,   0,   0,   0,   -5,
+    -10, -10,   0,   0,   0,   0, -10,  -10
 };
 
 // bishop positional score
@@ -1928,7 +2104,7 @@ const int bishop_score[64] =
      0,   0,   0,  10,  10,   0,   0,   0,
      0,   0,  10,  20,  20,  10,   0,   0,
      0,   0,  10,  20,  20,  10,   0,   0,
-     0,  10,   0,   0,   0,   0,  10,   0,
+     0,  10,   5,   0,   0,   5,  10,   0,
      0,  30,   0,   0,   0,   0,  30,   0,
      0,   0, -10,   0,   0, -10,   0,   0
 
@@ -1944,7 +2120,7 @@ const int rook_score[64] =
      0,   0,  10,  20,  20,  10,   0,   0,
      0,   0,  10,  20,  20,  10,   0,   0,
      0,   0,  10,  20,  20,  10,   0,   0,
-     0,   0,   0,  20,  20,   0,   0,   0
+     0,   0,   5,  20,  20,   5,   0,   0
 
 };
 
@@ -1958,7 +2134,7 @@ const int king_score[64] =
      0,   5,  10,  20,  20,  10,   5,   0,
      0,   0,   5,  10,  10,   5,   0,   0,
      0,   5,   5,  -5,  -5,   0,   5,   0,
-     0,   0,   5,   0, -15,   0,  10,   0
+     0,   0,   8,   0, -15,   0,  10,   0
 };
 
 // mirror positional score tables for opposite side
@@ -2055,19 +2231,74 @@ static int mvv_lva[12][12] = {
     100, 200, 300, 400, 500, 600,  100, 200, 300, 400, 500, 600
 };
 
+#define MAX_PLY 64
+
 //killer move indexed by [id][ply]
-int killer_moves[2][64];
+int killer_moves[2][MAX_PLY];
 
 //history move indexed by [piece][square]
 int history_moves[12][64];
 
+//score PV flags
+int follow_pv, score_pv;
+
+/*
+      ================================
+            Triangular PV table
+      --------------------------------
+        PV line: e2e4 e7e5 g1f3 b8c6
+      ================================
+           0    1    2    3    4    5
+      
+      0    m1   m2   m3   m4   m5   m6
+      
+      1    0    m2   m3   m4   m5   m6 
+      
+      2    0    0    m3   m4   m5   m6
+      
+      3    0    0    0    m4   m5   m6
+       
+      4    0    0    0    0    m5   m6
+      
+      5    0    0    0    0    0    m6
+*/
+
+// PV length
+int pv_length[MAX_PLY];
+
+// PV table
+int pv_table[MAX_PLY][MAX_PLY];
+
 //half move counter
 int ply;
 
-int best_move;
+static inline void enable_PV_scoring(moves *move_list)
+{
+    follow_pv = 0;
+
+    for(int i = 0; i < move_list->count; i++)
+    {
+        if(move_list->moves[i] == pv_table[0][ply])
+        {
+            follow_pv = 1;
+
+            score_pv = 1;
+        }
+    }
+}
 
 static inline int score_move(int move)
 {
+    if(score_pv)
+    {
+        if(pv_table[0][ply] == move)
+        {
+            score_pv = 0;
+
+            return 20000;
+        }
+    }
+
     if(get_move_capture(move))
     {
         int target_piece = P; //initial value takes care of en passant
@@ -2108,18 +2339,38 @@ void print_move_scores(moves* move_list)
     }
 }
 
-int move_score_compare(const void* move1, const void* move2)
-{
-    return score_move(*(int*)move2) - score_move(*(int*)move1);
-}
-
 static inline void sort_moves(moves* move_list) //descending
 {
-    qsort(move_list->moves, move_list->count, sizeof(int), move_score_compare);
+    int move_scores[move_list->count];
+    for (int count = 0; count < move_list->count; count++)
+        move_scores[count] = score_move(move_list->moves[count]);
+    
+    //simple bubble sort
+    for (int current_move = 0; current_move < move_list->count; current_move++)
+    {
+        for (int next_move = current_move + 1; next_move < move_list->count; next_move++)
+        {
+            if (move_scores[current_move] < move_scores[next_move])
+            {
+                int temp_score = move_scores[current_move];
+                move_scores[current_move] = move_scores[next_move];
+                move_scores[next_move] = temp_score;
+                
+                int temp_move = move_list->moves[current_move];
+                move_list->moves[current_move] = move_list->moves[next_move];
+                move_list->moves[next_move] = temp_move;
+            }
+        }
+    }
 }
 
 static inline int quiescence(int alpha, int beta)
 {
+    // every 2047 nodes
+    if((nodes & 2047 ) == 0)
+        // "listen" to the GUI/user input
+        communicate();
+
     nodes++;
     int eval = evaluate();
 
@@ -2162,6 +2413,9 @@ static inline int quiescence(int alpha, int beta)
 
         take_back();
 
+        // return 0 if time is up
+        if(stopped == 1) return 0;
+
         // fail-hard cutoff
         if (score >= beta)
         {
@@ -2180,17 +2434,26 @@ static inline int quiescence(int alpha, int beta)
 }
 
 
+const int full_depth_moves = 4;
+const int reduction_limit = 3;
+
 static inline int negamax(int depth, int alpha, int beta)
 {
+    // every 2047 nodes
+    if((nodes & 2047 ) == 0)
+        // "listen" to the GUI/user input
+        communicate();
+
+    pv_length[ply] = ply;
+
     if (depth == 0)
         return quiescence(alpha, beta);
         //return evaluate();
+
+    if(depth > MAX_PLY - 1)
+        return evaluate();
     
     nodes++;
-
-    int best_move_so_far;
-
-    int old_alpha;
 
     int is_check = is_square_attacked(get_ls1b_index((side == white ? bitboards[K]
                                                                     : bitboards[k])),
@@ -2200,11 +2463,34 @@ static inline int negamax(int depth, int alpha, int beta)
 
     int legal_moves = 0;
 
+    // Null Move Pruning
+    if(depth >= 3 && is_check == 0 && ply)
+    {
+        copy_board();
+
+        side ^= 1;
+
+        enpassant = no_sq;
+
+        int score = -negamax(depth - 1 - 2, -beta, -beta + 1);
+ 
+        take_back();
+
+        if(score >= beta)
+            return beta;
+    }
+
     moves move_list[1];
 
     generate_moves(move_list);
 
+    // make sure PV gets scored in sorting
+    if(follow_pv)
+        enable_PV_scoring(move_list);
+
     sort_moves(move_list);
+
+    int moves_searched = 0;
 
     for(int move_count = 0; move_count < move_list->count; move_count++)
     {
@@ -2222,18 +2508,52 @@ static inline int negamax(int depth, int alpha, int beta)
 
         legal_moves++;
 
-        int score = -negamax(depth-1, -beta, -alpha);
+        int score;
 
+        // PVS Search with Late Move Reduction
+        
+        if(moves_searched == 0)
+        {
+            score = -negamax(depth-1, -beta, -alpha);
+        }
+
+        else
+        {
+            if(moves_searched >= full_depth_moves && depth >= reduction_limit && is_check == 0
+                && get_move_capture(move) == 0 && get_move_promoted(move) == 0) 
+            {
+                score = -negamax(depth-2, -alpha-1, -alpha); // LMR
+            }
+            else
+            {
+                score = alpha + 1;
+            }
+
+            if(score > alpha) //  PVS runs for captures, checks, promotions, first few moves and low depth searches
+            {
+                score = -negamax(depth-1, -alpha-1, -alpha);
+
+                if(score > alpha && score < beta)
+                {
+                    score = -negamax(depth-1, -beta, -alpha);
+                }
+            }
+        }
+        
         ply--;
 
         take_back();
+
+        // return 0 if time is up
+        if(stopped == 1) return 0;
+
+        moves_searched++;
 
         // fail-hard cutoff
         if (score >= beta)
         {
             if(!get_move_capture(move))
             {
-
                 killer_moves[1][ply] = killer_moves[0][ply];
                 killer_moves[0][ply] = move;
             }
@@ -2248,8 +2568,13 @@ static inline int negamax(int depth, int alpha, int beta)
                 history_moves[get_move_piece(move)][get_move_dest(move)] += depth;
             alpha = score;
 
-            if (ply == 0) // if root node
-                best_move_so_far = move;
+            pv_table[ply][ply] = move;
+
+            for(int next_ply = ply + 1; next_ply < pv_length[ply+1]; next_ply++)
+                pv_table[ply][next_ply] = pv_table[ply+1][next_ply];
+
+            pv_length[ply] = pv_length[ply+1];
+
         }       
     }
 
@@ -2260,88 +2585,147 @@ static inline int negamax(int depth, int alpha, int beta)
         else         // stalemate
             return 0;
     }
-    if (old_alpha != alpha)
-        best_move = best_move_so_far;
+
     // node fails low
     return alpha;
 }
 
 void search_position(int depth)
 {
-    moves move_list[1]; 
-    generate_moves(move_list);
+    // reset data from a previous search
+    nodes = 0;
 
-    int score = negamax(depth, -50000, 50000); // -50000 is -inf and 50000 is +inf
-    
-    if(best_move)
-    {
-        printf("info score cp %d depth %d nodes %ld\n", score, depth, nodes);
-        printf("bestmove ");
-        print_move(best_move);
-        printf("\n");        
+    // reset "time is up" flag
+    stopped = 0;
+
+    // PV score flags
+    follow_pv = 0;
+    score_pv = 0;
+
+    memset(killer_moves, 0, sizeof(killer_moves));
+    memset(history_moves, 0, sizeof(history_moves));
+    memset(pv_table, 0, sizeof(pv_table));
+    memset(pv_length, 0, sizeof(pv_length));
+
+    //Iterative deepening
+    int alpha = -50000, beta = 50000;
+    int best_move_so_far;
+
+    for(int current_depth = 1; current_depth <= depth; current_depth++)
+    {        
+        // if time is up
+        if(stopped == 1)
+            // stop calculating and return best move so far 
+            break;
+
+        follow_pv = 1;
+        int score = negamax(current_depth, alpha, beta); // -50000 is -inf and 50000 is +inf
+
+        if((score <= alpha) || (score >= beta)) // if value falls out of narrow window reset window len with infs
+        {
+            alpha = -50000;
+            beta = 50000;
+            continue;
+        }
+
+        // Improvement on Iterative deepening
+        // Assume the newer vals will be close to the previous one
+        // Adjust the alpha-beta window accordingly
+        alpha = score - 50;
+        beta = score + 50;
+
+        printf("info score cp %d depth %d nodes %ld pv ", score, current_depth, nodes);
+            
+        for(int i = 0; i < pv_length[0]; i++)
+        {
+            print_move(pv_table[0][i]);
+            printf(" ");
+        }
+
+        printf("\n");
+        
+        best_move_so_far = pv_table[0][0];  
     }
+    printf("bestmove ");
+    if (stopped == 0)
+        print_move(pv_table[0][0]);
+    else
+        print_move(best_move_so_far);
+
+    printf("\n"); 
 }
 
 
-/****************************************************************
- * 
- * 
- * 
- *                              UCI                                
- * 
- * 
- *
- * **************************************************************/
+/********************************************
+*
+*                      UCI
+*                 forked from BBC
+*
+************************************************/
 
-int parse_move(char *uci_move)
+// parse user/GUI move string input (e.g. "e7e8q")
+int parse_move(char *move_string)
 {
+    // create move list instance
     moves move_list[1];
-
+    
+    // generate moves
     generate_moves(move_list);
-
-    int source_square = (uci_move[0] - 'a') + (8 - (uci_move[1] - '0')) * 8;
-
-    int dest_square =   (uci_move[2] - 'a') + (8 - (uci_move[3] - '0')) * 8;
-
-    for(int move_count = 0; move_count < move_list->count; move_count++)
+    // print_move_list(move_list);
+    
+    // parse source square
+    int source_square = (move_string[0] - 'a') + (8 - (move_string[1] - '0')) * 8;
+    
+    // parse target square
+    int target_square = (move_string[2] - 'a') + (8 - (move_string[3] - '0')) * 8;
+    
+    // loop over the moves within a move list
+    for (int move_count = 0; move_count < move_list->count; move_count++)
     {
+        // init move
         int move = move_list->moves[move_count];
-
-        if (source_square == get_move_source(move) && dest_square == get_move_dest(move))
+        
+        // make sure source & target squares are available within the generated move
+        if (source_square == get_move_source(move) && target_square == get_move_dest(move))
         {
-            int promoted = get_move_promoted(move);
-
-            if(promoted)
+            // init promoted piece
+            int promoted_piece = get_move_promoted(move);
+            
+            // promoted piece is available
+            if (promoted_piece)
             {
-                if((promoted == Q || promoted == q) && uci_move[4] == 'q')
-                {
+                printf("in promoted");
+                // promoted to queen
+                if ((promoted_piece == Q || promoted_piece == q) && move_string[4] == 'q')
+                    // return legal move
                     return move;
-                }
-
-                else if((promoted == R || promoted == r) && uci_move[4] == 'r')
-                {
+                
+                // promoted to rook
+                else if ((promoted_piece == R || promoted_piece == r) && move_string[4] == 'r')
+                    // return legal move
                     return move;
-                }
-
-                else if((promoted == B || promoted == b) && uci_move[4] == 'b')
-                {
+                
+                // promoted to bishop
+                else if ((promoted_piece == B || promoted_piece == b) && move_string[4] == 'b')
+                    // return legal move
                     return move;
-                }
-
-                else if((promoted == N || promoted == n) && uci_move[4] == 'n')
-                {
+                
+                // promoted to knight
+                else if ((promoted_piece == N || promoted_piece == n) && move_string[4] == 'n')
+                    // return legal move
                     return move;
-                }
-
-                else
-                    continue; // to handle invalid promotion piece
+                
+                // continue the loop on possible wrong promotions (e.g. "e7e8f")
+                continue;
             }
-
-            return move; // legal move
+            
+            // return legal move
+            return move;
         }
     }
-
-    return 0; // illegal move
+    
+    // return illegal move
+    return 0;
 }
 
 /*
@@ -2360,10 +2744,13 @@ int parse_move(char *uci_move)
     position fen r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1 moves e2a6 e8g8
 */
 
+// parse UCI "position" command
 void parse_position(char *command)
 {
-    command += 9; // go past "position "
-
+    // shift pointer to the right where next token begins
+    command += 9;
+    
+    // init pointer to the current character in the command string
     char *current_char = command;
     
     // parse UCI "startpos" command
@@ -2407,58 +2794,132 @@ void parse_position(char *command)
         {
             // parse next move
             int move = parse_move(current_char);
+            // printf("\nParsed Move: ");
+            // print_move(move);
             
-            // no more moves
+            // if no more moves
             if (move == 0)
+                // break out of the loop
                 break;
             
+            // make move on the chess board
             make_move(move, all_moves);
             
             // move current character mointer to the end of current move
             while (*current_char && *current_char != ' ') current_char++;
             
+            // go to the next move
             current_char++;
+        }        
+    }
+    
+    // print board
+    //print_board();
+}
+
+// parse UCI command "go"
+void parse_go(char *command)
+{
+    // init parameters
+    int depth = -1;
+
+    // init argument
+    char *argument = NULL;
+
+    // infinite search
+    if ((argument = strstr(command,"infinite"))) {}
+
+    // match UCI "binc" command
+    if ((argument = strstr(command,"binc")) && side == black)
+        // parse black time increment
+        inc = atoi(argument + 5);
+
+    // match UCI "winc" command
+    if ((argument = strstr(command,"winc")) && side == white)
+        // parse white time increment
+        inc = atoi(argument + 5);
+
+    // match UCI "wtime" command
+    if ((argument = strstr(command,"wtime")) && side == white)
+        // parse white time limit
+        ucitime = atoi(argument + 6);
+
+    // match UCI "btime" command
+    if ((argument = strstr(command,"btime")) && side == black)
+        // parse black time limit
+        ucitime = atoi(argument + 6);
+
+    // match UCI "movestogo" command
+    if ((argument = strstr(command,"movestogo")))
+        // parse number of moves to go
+        movestogo = atoi(argument + 10);
+
+    // match UCI "movetime" command
+    if ((argument = strstr(command,"movetime")))
+        // parse amount of time allowed to spend to make a move
+        movetime = atoi(argument + 9);
+
+    // match UCI "depth" command
+    if ((argument = strstr(command,"depth")))
+        // parse search depth
+        depth = atoi(argument + 6);
+
+    // if move time is available (only use for first move for lichess compatibility)
+    if(movetime != -1)
+    {
+        // set time equal to move time
+        ucitime = movetime;
+
+        // set moves to go to 1
+        movestogo = 1;
+    }
+
+    // reset movetime
+    movetime = -1;
+
+    // init start time
+    starttime = get_time_ms();
+
+    // init search depth
+    depth = depth;
+
+    // if time control is available
+    if(ucitime != -1)
+    {
+        // flag we're playing with time control
+        timeset = 1;
+
+        // set up timing
+        ucitime /= movestogo;
+        ucitime -= 150; // ping overhead
+        stoptime = starttime + ucitime + inc;
+        movestogo--;
+
+        if (movestogo == 0)
+        {
+            movestogo = 15;
+        }
+
+        if(first_move == 1)
+        {
+            movestogo = 120;
+            first_move = 0;
         }
     }
 
-    print_board();
-}
+    // if depth is not available
+    if(depth == -1)
+        // set depth to 64 plies (takes ages to complete...)
+        depth = 64;
 
-/*
-    Example UCI commands to make engine search for the best move
-    
-    // fixed depth search
-    go depth 64
-*/
+    // print debug info
+    // printf("time:%d start:%d stop:%d depth:%d timeset:%d\n",
+    // ucitime, starttime, stoptime, depth, timeset);
 
-// parse UCI "go" command
-void parse_go(char *command)
-{
-    // init depth
-    int depth = -1;
-    
-    // init character pointer to the current depth argument
-    char *current_depth = NULL;
-    
-    // handle fixed depth search
-    if (current_depth = strstr(command, "depth"))
-        //convert string to integer and assign the result value to depth
-        depth = atoi(current_depth + 6);
-    
-    // different time controls placeholder
-    else
-        depth = 5;
-    
     // search position
+    // print_board();
     search_position(depth);
-    printf("depth: %d\n", depth);
 }
-
-/*
-    GUI -> isready
-    Engine -> readyok
-    GUI -> ucinewgame
-*/
 
 // main UCI loop
 void uci_loop()
@@ -2471,9 +2932,6 @@ void uci_loop()
     char input[3000];
     
     // print engine info
-    printf("id name BBCE\n");
-    printf("id author Kiran\n");
-    printf("uciok\n");
     
     // main loop
     while (1)
@@ -2525,8 +2983,8 @@ void uci_loop()
         else if (strncmp(input, "uci", 3) == 0)
         {
             // print engine info
-            printf("id name BBCE\n");
-            printf("id name Kiran\n");
+            printf("id name Jabberook-v1.0\n");
+            printf("id author Kiran\n");
             printf("uciok\n");
         }
     }
@@ -2570,25 +3028,29 @@ int main()
     
     init_all();
     
-    int debug = 1;
+    int debug = 0;
 
     if(debug)
     {
         parse_fen(tricky_position);
         print_board();
-        
+
+        //int starttime = get_time_ms();
+
         search_position(5);
 
-        // moves move_list[1];
+        //printf("\nTime taken: %dms\n", get_time_ms() - starttime);
 
-        // generate_moves(move_list);
+    //     moves move_list[1];
 
-        // print_move_scores(move_list);
+    //     generate_moves(move_list);
 
-        // printf("\n\n");
-        // sort_moves(move_list);
+    //     print_move_scores(move_list);
 
-        // print_move_scores(move_list);
+    //     printf("\n\n");
+    //     sort_moves(move_list);
+
+    //     print_move_scores(move_list);
     }
     else
         uci_loop();
